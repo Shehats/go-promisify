@@ -1,6 +1,7 @@
 package promise
 
 import (
+	"fmt"
 	"reflect"
 	"sync"
 )
@@ -74,6 +75,7 @@ func execute[T any](
 	obj, err := f(args...)
 	if err == nil {
 		promise.successChannel <- obj.(T)
+		promise.failureChannel <- nil
 	} else {
 		promise.failureChannel <- err
 	}
@@ -86,14 +88,14 @@ func executeThenCallback[T, S any](
 ) {
 	defer promise2.mutex.Unlock()
 	defer promise2.wg.Done()
-	arg := <-promise1.successChannel
 	err := <-promise1.failureChannel
 	if err == nil {
+		arg := <-promise1.successChannel
 		obj, err := f(arg)
 		promise2.successChannel <- obj
 		promise2.failureChannel <- err
 	} else {
-		promise1.failureChannel <- err
+		promise2.failureChannel <- err
 	}
 }
 
@@ -109,18 +111,57 @@ func executeCatchCallback[T, S any](
 		obj, err := f(err)
 		promise2.successChannel <- obj
 		promise2.failureChannel <- err
+	} else {
+		promise2.failureChannel <- nil
 	}
 }
 
-func executeFinallyCallback[T any](
+func executeFinally[T any](
 	promise *Promise[T],
-	f func(T, error),
+	f func(),
+) {
+	defer promise.mutex.Unlock()
+	defer promise.wg.Done()
+	promise.drainChannels()
+	f()
+}
+
+func executeThen[T any](
+	promise *Promise[T],
+	f func(T),
 ) {
 	defer promise.mutex.Unlock()
 	defer promise.wg.Done()
 	err := <-promise.failureChannel
-	obj := <-promise.successChannel
-	f(obj, err)
+	if err == nil {
+		obj := <-promise.successChannel
+		f(obj)
+	} else {
+		promise.failureChannel <- err
+	}
+}
+
+func executeCatch[T any](
+	promise *Promise[T],
+	f func(error),
+) {
+	defer promise.mutex.Unlock()
+	defer promise.wg.Done()
+	err := <-promise.failureChannel
+	if err != nil {
+		f(err)
+	}
+}
+
+func (promise *Promise[T]) drainChannels() {
+	if len(promise.failureChannel) == 1 {
+		err := <-promise.failureChannel
+		errMsg := fmt.Sprintf("Promise execution has an unhandled error of %v\nPlease consider using a catch clause to handle errors", err)
+		panic(errMsg)
+	}
+	if len(promise.successChannel) == 1 {
+		<-promise.successChannel
+	}
 }
 
 func Promisify[T any](obj any, args ...any) *Promise[T] {
@@ -159,8 +200,8 @@ func promisifyFunc[T any](f func(...any) (any, error), args ...any) *Promise[T] 
 // object in the success channel
 func Then[T, S any](promise *Promise[T], successFunc func(T) (S, error)) *Promise[S] {
 	resultPromise := fromPromise[T, S](promise)
-	resultPromise.wg.Add(1)
 	promise.mutex.Lock()
+	resultPromise.wg.Add(1)
 	go executeThenCallback(promise, resultPromise, successFunc)
 	return resultPromise
 }
@@ -170,8 +211,8 @@ func Then[T, S any](promise *Promise[T], successFunc func(T) (S, error)) *Promis
 // error in the error channel
 func Catch[T, S any](promise *Promise[T], catchFunc func(error) (S, error)) *Promise[S] {
 	resultPromise := fromPromise[T, S](promise)
-	resultPromise.wg.Add(1)
 	promise.mutex.Lock()
+	resultPromise.wg.Add(1)
 	go executeCatchCallback(promise, resultPromise, catchFunc)
 	return resultPromise
 }
@@ -180,11 +221,22 @@ func Catch[T, S any](promise *Promise[T], catchFunc func(error) (S, error)) *Pro
 // Runs the then function using the
 // object in the success channel
 // and the error in the error channel
-func (promise *Promise[T]) Do(finallyFunc func(T, error)) {
-	promise.wg.Add(1)
+func (promise *Promise[T]) Finally(finallyFunc func()) {
 	promise.mutex.Lock()
-	go executeFinallyCallback(promise, finallyFunc)
-	promise.wg.Wait()
+	promise.wg.Add(1)
+	go executeFinally(promise, finallyFunc)
+}
+
+func (promise *Promise[T]) Then(successFunc func(T)) {
+	promise.mutex.Lock()
+	promise.wg.Add(1)
+	go executeThen(promise, successFunc)
+}
+
+func (promise *Promise[T]) Catch(errorFunc func(error)) {
+	promise.mutex.Lock()
+	promise.wg.Add(1)
+	go executeCatch(promise, errorFunc)
 }
 
 // Exec
