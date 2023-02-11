@@ -23,11 +23,14 @@ type Promise[T any] struct {
 	wg *sync.WaitGroup
 }
 
+// stores information about any
+// object
 type meta struct {
 	objectType  reflect.Type
 	objectValue reflect.Value
 }
 
+// newPromise
 // Creates a new Promise instance
 func newPromise[T any]() *Promise[T] {
 	return &Promise[T]{
@@ -38,6 +41,8 @@ func newPromise[T any]() *Promise[T] {
 	}
 }
 
+// fromPromise
+// Creates a promise from Promise
 func fromPromise[T, S any](promise *Promise[T]) *Promise[S] {
 	return &Promise[S]{
 		successChannel: make(chan S, 1),
@@ -47,10 +52,13 @@ func fromPromise[T, S any](promise *Promise[T]) *Promise[S] {
 	}
 }
 
+// isFunction
+// checks whether an obj is a function
 func isFunction(obj any) bool {
 	return reflect.TypeOf(obj).Kind() == reflect.Func
 }
 
+// call
 // calls any function by reflection
 func call(obj any, args ...meta) (any, error) {
 	vargs := make([]reflect.Value, 0)
@@ -61,18 +69,26 @@ func call(obj any, args ...meta) (any, error) {
 	ret := function.Call(vargs)
 	if !ret[1].IsNil() {
 		err := ret[1].Interface().(error)
-		return nil, err
+		return ret[0].Interface(), err
 	}
 	return ret[0].Interface(), nil
 }
 
+// execute
+// calls the function that
+// creates the promise and
+// and runs a function and
+// puts the function's return
+// in the subsequent promise
 func execute[T any](
 	promise *Promise[T],
-	f func(...any) (any, error),
-	args ...any) {
+	f func(any, ...meta) (T, error),
+	obj any,
+	args ...meta) {
+	defer promise.recover()
 	defer promise.mutex.Unlock()
 	defer promise.wg.Done()
-	obj, err := f(args...)
+	obj, err := f(obj, args...)
 	if err == nil {
 		promise.successChannel <- obj.(T)
 		promise.failureChannel <- nil
@@ -81,11 +97,24 @@ func execute[T any](
 	}
 }
 
+// executeObj
+// locks the mutex while the promise is
+// created from an object
+func executeObj[T any](promise *Promise[T], obj T) {
+	defer promise.mutex.Unlock()
+	defer promise.wg.Done()
+	promise.failureChannel <- nil
+	promise.successChannel <- obj
+}
+
+// executeThenCallback
+// executes then using two promises
 func executeThenCallback[T, S any](
 	promise1 *Promise[T],
 	promise2 *Promise[S],
 	f func(T) (S, error),
 ) {
+	defer promise2.recover()
 	defer promise2.mutex.Unlock()
 	defer promise2.wg.Done()
 	err := <-promise1.failureChannel
@@ -99,11 +128,14 @@ func executeThenCallback[T, S any](
 	}
 }
 
+// executeCatchCallback
+// executes catch using two promises
 func executeCatchCallback[T, S any](
 	promise1 *Promise[T],
 	promise2 *Promise[S],
 	f func(error) (S, error),
 ) {
+	defer promise2.recover()
 	defer promise2.mutex.Unlock()
 	defer promise2.wg.Done()
 	err := <-promise1.failureChannel
@@ -116,6 +148,8 @@ func executeCatchCallback[T, S any](
 	}
 }
 
+// executeFinally
+// executes promise's finally
 func executeFinally[T any](
 	promise *Promise[T],
 	f func(),
@@ -126,78 +160,121 @@ func executeFinally[T any](
 	f()
 }
 
+// executeThen
+// executes promise then
 func executeThen[T any](
 	promise *Promise[T],
 	f func(T),
 ) {
+	defer promise.recover()
 	defer promise.mutex.Unlock()
 	defer promise.wg.Done()
 	err := <-promise.failureChannel
 	if err == nil {
 		obj := <-promise.successChannel
+		promise.failureChannel <- nil
 		f(obj)
 	} else {
 		promise.failureChannel <- err
 	}
 }
 
+// executeCatch
+// executes promise's catch
 func executeCatch[T any](
 	promise *Promise[T],
 	f func(error),
 ) {
+	defer promise.recover()
 	defer promise.mutex.Unlock()
 	defer promise.wg.Done()
 	err := <-promise.failureChannel
 	if err != nil {
+		// there can be another then waiting to execute
+		// putting nil into the failure channel allows
+		// the following then to work correctly
+		promise.failureChannel <- nil
 		f(err)
 	}
 }
 
+// drainChannels
+// clears channels
 func (promise *Promise[T]) drainChannels() {
 	if len(promise.failureChannel) == 1 {
 		err := <-promise.failureChannel
-		errMsg := fmt.Sprintf("Promise execution has an unhandled error of %v\nPlease consider using a catch clause to handle errors", err)
-		panic(errMsg)
+		if err != nil {
+			errMsg := fmt.Sprintf("Promise execution has an unhandled error of %v\nPlease consider using a catch clause to handle errors", err)
+			panic(errMsg)
+		}
 	}
 	if len(promise.successChannel) == 1 {
 		<-promise.successChannel
 	}
 }
 
+// funcRunner
+// casts call returns to the correct types
+func funcRunner[T any](obj any, args ...meta) (T, error) {
+	obj, err := call(obj, args...)
+	return obj.(T), err
+}
+
+// recover
+// recovers if the promise run causes
+// a panic
+func (promise *Promise[T]) recover() {
+	if r := recover(); r != nil {
+		err := fmt.Errorf("Promise entered an unhealth state due to panic:\n %v", r)
+		if len(promise.failureChannel) == 1 {
+			<-promise.failureChannel
+		}
+		promise.failureChannel <- err
+	}
+}
+
 func Promisify[T any](obj any, args ...any) *Promise[T] {
 	var promise *Promise[T]
-	argsMeta := make([]meta, 0)
-	for _, arg := range args {
-		argsMeta = append(argsMeta, meta{
-			objectType:  reflect.TypeOf(arg),
-			objectValue: reflect.ValueOf(arg),
-		})
-	}
 	if isFunction(obj) {
-		runner := func(vargs ...any) (any, error) {
-			return call(obj, argsMeta...)
+		argsMeta := make([]meta, 0)
+		for _, arg := range args {
+			argsMeta = append(argsMeta, meta{
+				objectType:  reflect.TypeOf(arg),
+				objectValue: reflect.ValueOf(arg),
+			})
 		}
-		promise = promisifyFunc[T](runner, args)
+		promise = promisifyFunc(funcRunner[T], obj, argsMeta...)
+	} else {
+		promise = promisfyObj(obj.(T))
 	}
 	return promise
 }
 
-// PromisifyFunc
+func promisfyObj[T any](obj T) *Promise[T] {
+	promise := newPromise[T]()
+	promise.wg.Add(1)
+	promise.mutex.Lock()
+	go executeObj(promise, obj)
+	return promise
+}
+
+// promisifyFunc
 // Executes the function and creates a promise
 // from the function's result.
 // If the function returns an error, places the err in the failure channel
 // If the function returns an object, puts the object in success channel
-func promisifyFunc[T any](f func(...any) (any, error), args ...any) *Promise[T] {
+func promisifyFunc[T any](f func(any, ...meta) (T, error), obj any, args ...meta) *Promise[T] {
 	promise := newPromise[T]()
 	promise.wg.Add(1)
 	promise.mutex.Lock()
-	go execute(promise, f, args)
+	go execute(promise, f, obj, args...)
 	return promise
 }
 
 // Then
-// Runs the then function using the
-// object in the success channel
+// runs a function following a promise
+// success and creates a new promise from
+// promise.
 func Then[T, S any](promise *Promise[T], successFunc func(T) (S, error)) *Promise[S] {
 	resultPromise := fromPromise[T, S](promise)
 	promise.mutex.Lock()
@@ -207,8 +284,9 @@ func Then[T, S any](promise *Promise[T], successFunc func(T) (S, error)) *Promis
 }
 
 // Catch
-// Runs the catch function using the
-// error in the error channel
+// runs a function following a promise failure
+// and creates a new promise from the failed
+// promise.
 func Catch[T, S any](promise *Promise[T], catchFunc func(error) (S, error)) *Promise[S] {
 	resultPromise := fromPromise[T, S](promise)
 	promise.mutex.Lock()
@@ -218,21 +296,25 @@ func Catch[T, S any](promise *Promise[T], catchFunc func(error) (S, error)) *Pro
 }
 
 // Finally
-// Runs the then function using the
-// object in the success channel
-// and the error in the error channel
+// runs a function after the promise and subsequent promises
+// were executed.
+// Ideal for clean up functions
 func (promise *Promise[T]) Finally(finallyFunc func()) {
 	promise.mutex.Lock()
 	promise.wg.Add(1)
 	go executeFinally(promise, finallyFunc)
 }
 
+// Then
+// executes a function following a promise sucess
 func (promise *Promise[T]) Then(successFunc func(T)) {
 	promise.mutex.Lock()
 	promise.wg.Add(1)
 	go executeThen(promise, successFunc)
 }
 
+// Catch
+// executes a function following a promise failure
 func (promise *Promise[T]) Catch(errorFunc func(error)) {
 	promise.mutex.Lock()
 	promise.wg.Add(1)
@@ -241,14 +323,28 @@ func (promise *Promise[T]) Catch(errorFunc func(error)) {
 
 // Exec
 // Waits for all of the promises to
-// execute
+// execute without returning the
+// value and cleans up the resources
+// It's recommended to use it if neither Finally
+// nor Await are used
 func (promise *Promise[T]) Exec() {
 	promise.wg.Wait()
+	promise.drainChannels()
 }
 
+// Await
+// Waits for all of the promises to
+// execute and returns the computed value
+// and the error if there is an error
 func (promise *Promise[T]) Await() (T, error) {
 	promise.wg.Wait()
-	obj := <-promise.successChannel
-	err := <-promise.failureChannel
+	var obj T
+	var err error
+	if len(promise.successChannel) == 1 {
+		obj = <-promise.successChannel
+	}
+	if len(promise.failureChannel) == 1 {
+		err = <-promise.failureChannel
+	}
 	return obj, err
 }
