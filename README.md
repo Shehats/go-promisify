@@ -39,11 +39,12 @@ p := promise.Promisify(myStructInstance) // returns *Promise[*MyStruct]
 
 eg:
 ```go
-p := promise.Promisify(func() *MyStruct {
-    return &MyStruct{
-    // set the fields
-    }
-  }()) // returns *Promise[*MyStruct]
+runner := func() *MyStruct {
+   return &MyStruct{
+   // set the fields
+   }
+}
+p := promise.Promisify(runner()) // returns *Promise[*MyStruct]
 ```
 3. A function instance and the arguments of the function. This will run the function with the arguments provided in a go routine and return a `*Promise[<YOUR_FUNCTION_RETURN_TYPE>]`. The function should return `(YOUR_TYPE, error)`, otherwise a panic will be raised. Also it's worth noting that the args should be provided in the same order the arguments are defined in the function, otherwise a panic will be raised.
 
