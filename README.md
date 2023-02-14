@@ -1,4 +1,6 @@
 ### go-promisify
+#golang #promise #future
+
 A golang package that provides a Javascript/Typescript Promise like go routine management.
 
 ### Requirements
