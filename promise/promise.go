@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"reflect"
 	"sync"
+	"sync/atomic"
 )
 
 // Promise interface that defines
@@ -21,6 +22,14 @@ type Promise[T any] struct {
 	mutex *sync.Mutex
 	// promise's wait group
 	wg *sync.WaitGroup
+	// boolean's to manage channels
+	hasThenSubscriber    *atomic.Bool
+	hasCatchSubscriber   *atomic.Bool
+	hasFinallySubscriber *atomic.Bool
+	hasExecSubscriber    *atomic.Bool
+	thenExecuted         *atomic.Bool
+	catchExecuted        *atomic.Bool
+	awaitSubscriber      *atomic.Bool
 }
 
 // stores information about any
@@ -34,10 +43,17 @@ type meta struct {
 // Creates a new Promise instance
 func newPromise[T any]() *Promise[T] {
 	return &Promise[T]{
-		successChannel: make(chan T, 1),
-		failureChannel: make(chan error, 1),
-		mutex:          &sync.Mutex{},
-		wg:             &sync.WaitGroup{},
+		successChannel:       make(chan T, 1),
+		failureChannel:       make(chan error, 1),
+		mutex:                &sync.Mutex{},
+		wg:                   &sync.WaitGroup{},
+		hasThenSubscriber:    &atomic.Bool{},
+		hasCatchSubscriber:   &atomic.Bool{},
+		hasFinallySubscriber: &atomic.Bool{},
+		hasExecSubscriber:    &atomic.Bool{},
+		thenExecuted:         &atomic.Bool{},
+		catchExecuted:        &atomic.Bool{},
+		awaitSubscriber:      &atomic.Bool{},
 	}
 }
 
@@ -45,10 +61,17 @@ func newPromise[T any]() *Promise[T] {
 // Creates a promise from Promise
 func fromPromise[T, S any](promise *Promise[T]) *Promise[S] {
 	return &Promise[S]{
-		successChannel: make(chan S, 1),
-		failureChannel: make(chan error, 1),
-		mutex:          promise.mutex,
-		wg:             promise.wg,
+		successChannel:       make(chan S, 1),
+		failureChannel:       make(chan error, 1),
+		mutex:                promise.mutex,
+		wg:                   promise.wg,
+		hasThenSubscriber:    &atomic.Bool{},
+		hasCatchSubscriber:   &atomic.Bool{},
+		hasFinallySubscriber: &atomic.Bool{},
+		hasExecSubscriber:    &atomic.Bool{},
+		thenExecuted:         &atomic.Bool{},
+		catchExecuted:        &atomic.Bool{},
+		awaitSubscriber:      &atomic.Bool{},
 	}
 }
 
@@ -117,6 +140,8 @@ func executeThenCallback[T, S any](
 	defer promise2.recover()
 	defer promise2.mutex.Unlock()
 	defer promise2.wg.Done()
+	defer promise1.thenExecuted.Store(true)
+	defer promise1.clearChannelsAfterThen()
 	err := <-promise1.failureChannel
 	if err == nil {
 		arg := <-promise1.successChannel
@@ -138,6 +163,8 @@ func executeCatchCallback[T, S any](
 	defer promise2.recover()
 	defer promise2.mutex.Unlock()
 	defer promise2.wg.Done()
+	defer promise1.catchExecuted.Store(true)
+	defer promise1.clearChannelAfterCatch()
 	err := <-promise1.failureChannel
 	if err != nil {
 		obj, err := f(err)
@@ -169,6 +196,8 @@ func executeThen[T any](
 	defer promise.recover()
 	defer promise.mutex.Unlock()
 	defer promise.wg.Done()
+	defer promise.thenExecuted.Store(true)
+	defer promise.clearChannelsAfterThen()
 	err := <-promise.failureChannel
 	if err == nil {
 		obj := <-promise.successChannel
@@ -188,6 +217,8 @@ func executeCatch[T any](
 	defer promise.recover()
 	defer promise.mutex.Unlock()
 	defer promise.wg.Done()
+	defer promise.catchExecuted.Store(true)
+	defer promise.clearChannelAfterCatch()
 	err := <-promise.failureChannel
 	if err != nil {
 		// there can be another then waiting to execute
@@ -276,6 +307,7 @@ func promisifyFunc[T any](f func(any, ...meta) (T, error), obj any, args ...meta
 // success and creates a new promise from
 // promise.
 func Then[T, S any](promise *Promise[T], successFunc func(T) (S, error)) *Promise[S] {
+	promise.hasThenSubscriber.Store(true)
 	resultPromise := fromPromise[T, S](promise)
 	promise.mutex.Lock()
 	resultPromise.wg.Add(1)
@@ -288,6 +320,7 @@ func Then[T, S any](promise *Promise[T], successFunc func(T) (S, error)) *Promis
 // and creates a new promise from the failed
 // promise.
 func Catch[T, S any](promise *Promise[T], catchFunc func(error) (S, error)) *Promise[S] {
+	promise.hasCatchSubscriber.Store(true)
 	resultPromise := fromPromise[T, S](promise)
 	promise.mutex.Lock()
 	resultPromise.wg.Add(1)
@@ -300,6 +333,7 @@ func Catch[T, S any](promise *Promise[T], catchFunc func(error) (S, error)) *Pro
 // were executed.
 // Ideal for clean up functions
 func (promise *Promise[T]) Finally(finallyFunc func()) {
+	promise.hasFinallySubscriber.Store(true)
 	promise.mutex.Lock()
 	promise.wg.Add(1)
 	go executeFinally(promise, finallyFunc)
@@ -308,6 +342,7 @@ func (promise *Promise[T]) Finally(finallyFunc func()) {
 // Then
 // executes a function following a promise sucess
 func (promise *Promise[T]) Then(successFunc func(T)) {
+	promise.hasCatchSubscriber.Store(true)
 	promise.mutex.Lock()
 	promise.wg.Add(1)
 	go executeThen(promise, successFunc)
@@ -316,6 +351,7 @@ func (promise *Promise[T]) Then(successFunc func(T)) {
 // Catch
 // executes a function following a promise failure
 func (promise *Promise[T]) Catch(errorFunc func(error)) {
+	promise.hasCatchSubscriber.Store(true)
 	promise.mutex.Lock()
 	promise.wg.Add(1)
 	go executeCatch(promise, errorFunc)
@@ -328,7 +364,8 @@ func (promise *Promise[T]) Catch(errorFunc func(error)) {
 // It's recommended to use it if neither Finally
 // nor Await are used
 func (promise *Promise[T]) Exec() {
-	promise.wg.Wait()
+	promise.mutex.Lock()
+	defer promise.mutex.Unlock()
 	promise.drainChannels()
 }
 
@@ -337,6 +374,7 @@ func (promise *Promise[T]) Exec() {
 // execute and returns the computed value
 // and the error if there is an error
 func (promise *Promise[T]) Await() (T, error) {
+	promise.awaitSubscriber.Store(true)
 	promise.wg.Wait()
 	var obj T
 	var err error
@@ -347,4 +385,32 @@ func (promise *Promise[T]) Await() (T, error) {
 		err = <-promise.failureChannel
 	}
 	return obj, err
+}
+
+func (promise *Promise[T]) clearChannelsAfterThen() {
+	hasAwait := promise.awaitSubscriber.Load()
+	hasFinally := promise.hasFinallySubscriber.Load()
+	hasExec := promise.hasExecSubscriber.Load()
+	if hasAwait || hasFinally || hasExec {
+		return
+	}
+	hasCatch := promise.hasCatchSubscriber.Load()
+	catchExecuted := promise.catchExecuted.Load()
+	if !hasCatch || catchExecuted {
+		promise.drainChannels()
+	}
+}
+
+func (promise *Promise[T]) clearChannelAfterCatch() {
+	hasAwait := promise.awaitSubscriber.Load()
+	hasFinally := promise.hasFinallySubscriber.Load()
+	hasExec := promise.hasExecSubscriber.Load()
+	if hasAwait || hasFinally || hasExec {
+		return
+	}
+	hasThen := promise.hasThenSubscriber.Load()
+	thenExecuted := promise.thenExecuted.Load()
+	if !hasThen || thenExecuted {
+		promise.drainChannels()
+	}
 }
