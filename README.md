@@ -5,7 +5,7 @@ A golang package that provides a Javascript/Typescript Promise like go routine m
 
 ### Requirements
 
-- go1.18 or newer
+- go1.19.x or newer
 
 ### Usage
 
