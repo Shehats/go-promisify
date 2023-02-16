@@ -1,6 +1,8 @@
 ### go-promisify
 #golang #promise #future
 
+![Alt text](https://github.com/Shehats/go-promisify/actions/workflows/test.yml/badge.svg)
+
 A golang package that provides a Javascript/Typescript Promise like go routine management.
 
 ### Requirements
