@@ -15,4 +15,4 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v2
       - name: Run test
-        run: cd promise && go test -race -count 100 ./... -coverprofile .test-coverage.txt
+        run: go test -race -count 100 ./... -coverprofile .test-coverage.txt
