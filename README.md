@@ -1,15 +1,26 @@
-### go-promisify
-#golang #promise #future
+# go-promisify
 
-![Alt text](https://github.com/Shehats/go-promisify/actions/workflows/test.yml/badge.svg)
+![Alt text](https://github.com/Shehats/go-promisify/actions/workflows/codeql.yml/badge.svg) ![CI STATUS](https://github.com/Shehats/go-promisify/actions/workflows/test.yml/badge.svg) ![Go Report Card](https://goreportcard.com/badge/github.com/Shehats/go-promisify) [![Go Doc](https://godoc.org/github.com/Shehats/go-promisify?status.svg)](https://pkg.go.dev/github.com/Shehats/go-promisify)
 
-A golang package that provides a Javascript/Typescript Promise like go routine management.
+A golang package that provides a ***Javascript/Typescript Promise abstraction*** to manage go routines, chain them and provide blocking and non blocking concurrent code.
 
-### Requirements
+## Requirements
 
 - go1.19.x or newer
 
-### Usage
+## Installing the package
+
+```
+go get github.com/Shehats/go-promisify
+```
+
+If you're using go.mod do:
+
+```
+go get -u github.com/Shehats/go-promisify
+```
+
+## Usage
 
 #### Importing a package
 
