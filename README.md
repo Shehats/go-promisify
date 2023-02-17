@@ -1,6 +1,6 @@
 # go-promisify
 
-![Alt text](https://github.com/Shehats/go-promisify/actions/workflows/codeql.yml/badge.svg) ![CI STATUS](https://github.com/Shehats/go-promisify/actions/workflows/test.yml/badge.svg) ![Go Report Card](https://goreportcard.com/badge/github.com/Shehats/go-promisify) [![Go Doc](https://godoc.org/github.com/Shehats/go-promisify?status.svg)](https://pkg.go.dev/github.com/Shehats/go-promisify)
+![Alt text](https://github.com/Shehats/go-promisify/actions/workflows/codeql.yml/badge.svg) ![CI STATUS](https://github.com/Shehats/go-promisify/actions/workflows/test.yml/badge.svg) ![Build STATUS](https://github.com/Shehats/go-promisify/actions/workflows/build.yml/badge.svg) ![Go Report Card](https://goreportcard.com/badge/github.com/Shehats/go-promisify) [![Go Doc](https://godoc.org/github.com/Shehats/go-promisify?status.svg)](https://pkg.go.dev/github.com/Shehats/go-promisify)
 
 A golang package that provides a ***Javascript/Typescript Promise like abstraction for Golang*** to help Node developers (like me) write concurrent/multithreaded code in Golang.
 
